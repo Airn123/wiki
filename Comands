@@ -1,35 +1,71 @@
-git clone https://github.com/manojjawalkar/personal-wiki.git
-docker-compose -f stack.yml up -d
-docker ps
-docker exec -it 7b44ba378e7f /bin/bash
-docker-compose -f stack.yml up -d
-docker-compose -f stack.yml down
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: awx-postgres
+    environment:
+      POSTGRES_USER: awx
+      POSTGRES_PASSWORD: awxpass
+      POSTGRES_DB: awx
+    volumes:
+      - awx_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Избегаем конфликта с Zabbix
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U awx"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - awx_net
 
-Установка докера
-apt update
-apt upgrade
-sudo apt install curl software-properties-common ca-certificates apt-transport-https -y
-wget -0- https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor | sudo tee /etc/apt/keyrings/docker.gpg > /dev/null
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable"| sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-apt update
-apt-cache policy docker-ce
-sudo apt install docker-ce -y
-sudo systemctl status docker
+  redis:
+    image: redis:7-alpine
+    container_name: awx-redis
+    command: redis-server --requirepass awxredispass
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - awx_net
 
-docker-compose up
-curl -L "https://github.com/docket/compose/releases/download/1.29.2/docker-compose-$(uname -s)" -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
-docker-compose --version
-usermod -aG docker $USER
-newgrp docker
+  awx:
+    image: ghcr.io/ansible/awx:latest
+    container_name: awx-web
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AWX_ADMIN_USER: admin
+      AWX_ADMIN_PASSWORD: admin  # ЗАМЕНИТЕ ОБЯЗАТЕЛЬНО!
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: awx
+      DATABASE_PASSWORD: awxpass
+      DATABASE_NAME: awx
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: awxredispass
+      AWX_WEBHOOKS_ENABLED: "true"
+    volumes:
+      - awx_projects:/var/lib/awx/projects
+      - awx_config:/etc/tower
+    ports:
+      - "8052:8052"  # Web UI
+      - "8013:8013"  # Webhooks
+    restart: unless-stopped
+    networks:
+      - awx_net
 
-apt install apache2
-apache2-v
-docker-compose -f stack.yml up -d
-apt install php
-docker-compose -f stack.yml down
-docker-compose -f stack.yml up -d
-docker ps 
-docker exec -it ИМЯ КОНТЕЙНЕРА /bin/bash
-apt install ifupdown
-nano LocalSettings.php поменять локалхост и изменить айпи по необходимости
+volumes:
+  awx_postgres_data:
+  awx_projects:
+  awx_config:
+
+networks:
+  awx_net:
+    driver: bridge
